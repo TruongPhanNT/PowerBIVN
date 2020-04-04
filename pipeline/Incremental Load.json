@@ -1,0 +1,182 @@
+{
+	"name": "Incremental Load",
+	"properties": {
+		"activities": [
+			{
+				"name": "GET CFG",
+				"type": "Lookup",
+				"dependsOn": [],
+				"policy": {
+					"timeout": "7.00:00:00",
+					"retry": 0,
+					"retryIntervalInSeconds": 30,
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"source": {
+						"type": "AzureSqlSource",
+						"sqlReaderQuery": {
+							"value": "SELECT * from @{pipeline().parameters.ConfigTable}\nIF @@ROWCOUNT = 0 THROW 50000,'No rows in configuration table!',1",
+							"type": "Expression"
+						},
+						"queryTimeout": "02:00:00"
+					},
+					"dataset": {
+						"referenceName": "sqlDES",
+						"type": "DatasetReference",
+						"parameters": {
+							"TableName": "dummy"
+						}
+					},
+					"firstRowOnly": false
+				}
+			},
+			{
+				"name": "SQL CFG",
+				"type": "Filter",
+				"dependsOn": [
+					{
+						"activity": "GET CFG",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"userProperties": [],
+				"typeProperties": {
+					"items": {
+						"value": "@activity('GET CFG').output.value",
+						"type": "Expression"
+					},
+					"condition": {
+						"value": "@equals(item().SRC_name,'PersonSVC')",
+						"type": "Expression"
+					}
+				}
+			},
+			{
+				"name": "FOR EACH",
+				"type": "ForEach",
+				"dependsOn": [
+					{
+						"activity": "SQL CFG",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"userProperties": [],
+				"typeProperties": {
+					"items": {
+						"value": "@activity('SQL CFG').output.value",
+						"type": "Expression"
+					},
+					"activities": [
+						{
+							"name": "GET MAX SQL",
+							"type": "Lookup",
+							"dependsOn": [],
+							"policy": {
+								"timeout": "7.00:00:00",
+								"retry": 0,
+								"retryIntervalInSeconds": 30,
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"source": {
+									"type": "AzurePostgreSqlSource",
+									"query": {
+										"value": "SELECT MAX(@{item().WatermarkColumn}) as maxd FROM @{item().SRC_tab}",
+										"type": "Expression"
+									}
+								},
+								"dataset": {
+									"referenceName": "pgSRC_Person",
+									"type": "DatasetReference"
+								}
+							}
+						},
+						{
+							"name": "COPY",
+							"type": "Copy",
+							"dependsOn": [
+								{
+									"activity": "GET MAX SQL",
+									"dependencyConditions": [
+										"Succeeded"
+									]
+								}
+							],
+							"policy": {
+								"timeout": "7.00:00:00",
+								"retry": 0,
+								"retryIntervalInSeconds": 30,
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [
+								{
+									"name": "Source",
+									"value": "@{item().id}"
+								},
+								{
+									"name": "Destination",
+									"value": "@{item().DST_tab}."
+								}
+							],
+							"typeProperties": {
+								"source": {
+									"type": "AzureSqlSource",
+									"sqlReaderQuery": {
+										"value": "SELECT \n @{item().Cols} FROM @{item().SRC_tab} ",
+										"type": "Expression"
+									},
+									"queryTimeout": "02:00:00"
+								},
+								"sink": {
+									"type": "AzureSqlSink",
+									"preCopyScript": {
+										"value": "TRUNCATE TABLE @{item().DST_tab}",
+										"type": "Expression"
+									},
+									"disableMetricsCollection": false
+								},
+								"enableStaging": false
+							},
+							"inputs": [
+								{
+									"referenceName": "sqlSRC",
+									"type": "DatasetReference"
+								}
+							],
+							"outputs": [
+								{
+									"referenceName": "sqlDES",
+									"type": "DatasetReference",
+									"parameters": {
+										"TableName": {
+											"value": "@{item().DST_tab}",
+											"type": "Expression"
+										}
+									}
+								}
+							]
+						}
+					]
+				}
+			}
+		],
+		"parameters": {
+			"ConfigTable": {
+				"type": "string",
+				"defaultValue": "metadata.cfg"
+			}
+		},
+		"annotations": []
+	},
+	"type": "Microsoft.DataFactory/factories/pipelines"
+}

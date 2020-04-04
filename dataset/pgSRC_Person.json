@@ -1,0 +1,13 @@
+{
+	"name": "pgSRC_Person",
+	"properties": {
+		"linkedServiceName": {
+			"referenceName": "AzurePostgreSql2",
+			"type": "LinkedServiceReference"
+		},
+		"annotations": [],
+		"type": "AzurePostgreSqlTable",
+		"schema": []
+	},
+	"type": "Microsoft.DataFactory/factories/datasets"
+}

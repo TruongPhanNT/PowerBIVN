@@ -1,0 +1,215 @@
+{
+	"name": "pp_PG_to_SQL",
+	"properties": {
+		"activities": [
+			{
+				"name": "GET CFG",
+				"type": "Lookup",
+				"dependsOn": [],
+				"policy": {
+					"timeout": "7.00:00:00",
+					"retry": 0,
+					"retryIntervalInSeconds": 30,
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"source": {
+						"type": "AzureSqlSource",
+						"sqlReaderQuery": {
+							"value": "SELECT * from @{pipeline().parameters.ConfigTable}\nIF @@ROWCOUNT = 0 THROW 50000,'No rows in configuration table!',1",
+							"type": "Expression"
+						},
+						"queryTimeout": "02:00:00"
+					},
+					"dataset": {
+						"referenceName": "sqlDES",
+						"type": "DatasetReference",
+						"parameters": {
+							"TableName": "dummy"
+						}
+					},
+					"firstRowOnly": false
+				}
+			},
+			{
+				"name": "PG PERSON",
+				"type": "Filter",
+				"dependsOn": [
+					{
+						"activity": "GET CFG",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"userProperties": [],
+				"typeProperties": {
+					"items": {
+						"value": "@activity('GET CFG').output.value",
+						"type": "Expression"
+					},
+					"condition": {
+						"value": "@equals(item().SRC_name,'PersonSVC')",
+						"type": "Expression"
+					}
+				}
+			},
+			{
+				"name": "FOR EACH",
+				"type": "ForEach",
+				"dependsOn": [
+					{
+						"activity": "PG PERSON",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"userProperties": [],
+				"typeProperties": {
+					"items": {
+						"value": "@activity('PG PERSON').output.value",
+						"type": "Expression"
+					},
+					"activities": [
+						{
+							"name": "GET MAX UPDATE",
+							"type": "Lookup",
+							"dependsOn": [],
+							"policy": {
+								"timeout": "7.00:00:00",
+								"retry": 0,
+								"retryIntervalInSeconds": 30,
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"source": {
+									"type": "AzurePostgreSqlSource",
+									"query": {
+										"value": "select max (maxd) as maxd\nfrom (\nselect \nMAX(created_datetime) as maxd\nfrom public.@{item().SRC_tab}\nunion all\nselect \nmax(updated_datetime)\nfrom public.@{item().SRC_tab}\nunion all \nselect max(deleted_datetime) \nfrom public.@{item().SRC_tab}\n) A",
+										"type": "Expression"
+									}
+								},
+								"dataset": {
+									"referenceName": "pgSRC_Person",
+									"type": "DatasetReference"
+								}
+							}
+						},
+						{
+							"name": "COPY",
+							"type": "Copy",
+							"dependsOn": [
+								{
+									"activity": "GET MAX UPDATE",
+									"dependencyConditions": [
+										"Succeeded"
+									]
+								}
+							],
+							"policy": {
+								"timeout": "7.00:00:00",
+								"retry": 0,
+								"retryIntervalInSeconds": 30,
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"source": {
+									"type": "AzurePostgreSqlSource",
+									"query": {
+										"value": "SELECT \n @{item().Cols} FROM public.@{item().SRC_tab} \nWHERE  \n\n(created_datetime > @{item().WatermarkValue} and created_datetime <= @{activity('GET MAX UPDATE').output.firstRow.MAXD})\nor \n(updated_datetime > @{item().WatermarkValue} and updated_datetime <= @{activity('GET MAX UPDATE').output.firstRow.MAXD})\nor\n(deleted_datetime > @{item().WatermarkValue} and deleted_datetime <= @{activity('GET MAX UPDATE').output.firstRow.MAXD})",
+										"type": "Expression"
+									}
+								},
+								"sink": {
+									"type": "AzureSqlSink",
+									"preCopyScript": {
+										"value": "TRUNCATE TABLE stg.@{item().DST_tab}",
+										"type": "Expression"
+									},
+									"disableMetricsCollection": false
+								},
+								"enableStaging": false
+							},
+							"inputs": [
+								{
+									"referenceName": "pgSRC_Person",
+									"type": "DatasetReference"
+								}
+							],
+							"outputs": [
+								{
+									"referenceName": "sqlDES",
+									"type": "DatasetReference",
+									"parameters": {
+										"TableName": {
+											"value": "@{item().DST_tab}",
+											"type": "Expression"
+										}
+									}
+								}
+							]
+						},
+						{
+							"name": "UPDATE WATERMARK",
+							"type": "SqlServerStoredProcedure",
+							"dependsOn": [
+								{
+									"activity": "COPY",
+									"dependencyConditions": [
+										"Succeeded"
+									]
+								}
+							],
+							"policy": {
+								"timeout": "7.00:00:00",
+								"retry": 0,
+								"retryIntervalInSeconds": 30,
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"storedProcedureName": "[metadata].[usp_UpdateWatermark]",
+								"storedProcedureParameters": {
+									"id": {
+										"value": {
+											"value": "@{item().id}",
+											"type": "Expression"
+										},
+										"type": "Int16"
+									},
+									"NewWatermark": {
+										"value": {
+											"value": "@{activity('GET MAX UPDATE').output.firstRow.MAXD}",
+											"type": "Expression"
+										},
+										"type": "Int64"
+									}
+								}
+							},
+							"linkedServiceName": {
+								"referenceName": "AzureSqlReporting",
+								"type": "LinkedServiceReference"
+							}
+						}
+					]
+				}
+			}
+		],
+		"parameters": {
+			"ConfigTable": {
+				"type": "string",
+				"defaultValue": "metadata.cfg"
+			}
+		},
+		"annotations": []
+	},
+	"type": "Microsoft.DataFactory/factories/pipelines"
+}
